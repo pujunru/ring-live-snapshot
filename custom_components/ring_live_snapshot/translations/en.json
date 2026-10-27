@@ -1,0 +1,56 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add a live-snapshot camera",
+        "description": "Pick a camera with a WebRTC live view, such as a Ring camera. You get a button and an image entity for on-demand live frames. The `ring_live_snapshot.capture` action works for any such camera without adding it here.",
+        "data": {
+          "entity_id": "Camera"
+        }
+      }
+    },
+    "error": {
+      "camera_unavailable": "That camera is not available right now.",
+      "no_webrtc": "That camera has no WebRTC live view."
+    },
+    "abort": {
+      "already_configured": "That camera is already set up."
+    }
+  },
+  "entity": {
+    "button": {
+      "live_snapshot": {
+        "name": "Live snapshot"
+      }
+    },
+    "image": {
+      "live_snapshot": {
+        "name": "Live snapshot"
+      }
+    }
+  },
+  "services": {
+    "capture": {
+      "name": "Capture live frame",
+      "description": "Opens the camera's live view, saves a fresh frame, and closes the stream. Wakes battery cameras for a few seconds.",
+      "fields": {
+        "entity_id": {
+          "name": "Camera",
+          "description": "Camera with a WebRTC live view."
+        },
+        "filename": {
+          "name": "Filename",
+          "description": "Optional path to save the JPEG to, e.g. under /media."
+        },
+        "settle": {
+          "name": "Settle time",
+          "description": "Seconds of video to read after the first frame before keeping one."
+        },
+        "timeout": {
+          "name": "Timeout",
+          "description": "Give up if no frame arrives within this many seconds."
+        }
+      }
+    }
+  }
+}

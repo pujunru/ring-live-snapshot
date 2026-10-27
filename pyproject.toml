@@ -1,0 +1,8 @@
+[project]
+name = "ring-live-snapshot"
+version = "0.1.0"
+description = "Home Assistant integration that grabs fresh frames from Ring (WebRTC) cameras on demand"
+requires-python = ">=3.13"
+
+[tool.ruff]
+line-length = 110

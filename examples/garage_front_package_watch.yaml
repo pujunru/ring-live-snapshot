@@ -1,0 +1,111 @@
+# Package watch for the Ring "Garage Front" camera.
+#
+# Every 30 minutes (07:00–21:00), and 2 minutes after each motion event, grab a
+# live frame and ask the AI task whether a package sits in front of the garage
+# door, comparing against a reference photo of the empty driveway. A package
+# must show up in two frames 3 minutes apart before anyone is notified; the
+# flag clears on the first scan that finds the spot empty again.
+#
+# Needs: input_boolean.package_at_garage, and a reference frame taken once with
+# the driveway empty:
+#   action: ring_live_snapshot.capture
+#   data: {entity_id: camera.garage_front_live_view, filename: /media/garage_front/reference.jpg}
+
+- id: garage_front_package_scan
+  alias: "Garage Front – package scan"
+  mode: single
+  triggers:
+    - trigger: time_pattern
+      minutes: "/30"
+    - trigger: state
+      entity_id: sensor.garage_front_last_activity
+      for: "00:02:00"
+  conditions:
+    - condition: time
+      after: "07:00:00"
+      before: "21:00:00"
+    - condition: numeric_state
+      entity_id: sensor.garage_front_battery
+      above: 30
+  variables:
+    prompt: >-
+      Image 1 is a reference photo of the empty driveway in front of a garage
+      door. Image 2 is the same camera now. Is there a package, box, padded
+      envelope or shopping bag lying on the ground in image 2, near the garage
+      door or on the driveway, that is not in image 1? Ignore people, cars,
+      shadows, lighting changes, leaves, the drain cover, the round covers and
+      the plants.
+  actions:
+    - action: ring_live_snapshot.capture
+      data:
+        entity_id: camera.garage_front_live_view
+        filename: /media/garage_front/live.jpg
+    - action: ai_task.generate_data
+      data:
+        task_name: Garage front package check
+        instructions: "{{ prompt }}"
+        structure: &structure
+          package:
+            description: True if a delivered item is on the ground
+            required: true
+            selector: { boolean: {} }
+          where:
+            description: Short description of the item and its position, or empty
+            required: false
+            selector: { text: {} }
+        attachments:
+          - media_content_id: media-source://media_source/local/garage_front/reference.jpg
+            media_content_type: image/jpeg
+          - media_content_id: media-source://media_source/local/garage_front/live.jpg
+            media_content_type: image/jpeg
+      response_variable: first
+    - choose:
+        # Flag is up and the spot is empty again: clear it.
+        - conditions:
+            - condition: state
+              entity_id: input_boolean.package_at_garage
+              state: "on"
+            - condition: template
+              value_template: "{{ not first.data.package | default(true) }}"
+          sequence:
+            - action: input_boolean.turn_off
+              target: { entity_id: input_boolean.package_at_garage }
+        # New package: confirm with a second frame before notifying.
+        - conditions:
+            - condition: state
+              entity_id: input_boolean.package_at_garage
+              state: "off"
+            - condition: template
+              value_template: "{{ first.data.package | default(false) }}"
+          sequence:
+            - delay: "00:03:00"
+            - action: ring_live_snapshot.capture
+              data:
+                entity_id: camera.garage_front_live_view
+                filename: /media/garage_front/confirm.jpg
+            - action: ai_task.generate_data
+              data:
+                task_name: Garage front package confirm
+                instructions: "{{ prompt }}"
+                structure: *structure
+                attachments:
+                  - media_content_id: media-source://media_source/local/garage_front/reference.jpg
+                    media_content_type: image/jpeg
+                  - media_content_id: media-source://media_source/local/garage_front/confirm.jpg
+                    media_content_type: image/jpeg
+              response_variable: second
+            - if:
+                - condition: template
+                  value_template: "{{ second.data.package | default(false) }}"
+              then:
+                - action: input_boolean.turn_on
+                  target: { entity_id: input_boolean.package_at_garage }
+                - variables:
+                    message: "{{ second.data.where or first.data.where or 'Something was left in front of the garage.' }}"
+                - action: notify.mobile_app_your_phone  # one block per phone
+                  data:
+                    title: "📦 Package at the garage"
+                    message: "{{ message }}"
+                    data:
+                      tag: garage-front-package
+                      image: /media/local/garage_front/confirm.jpg

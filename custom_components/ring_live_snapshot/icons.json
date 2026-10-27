@@ -1,0 +1,14 @@
+{
+  "entity": {
+    "button": {
+      "live_snapshot": {
+        "default": "mdi:camera-iris"
+      }
+    }
+  },
+  "services": {
+    "capture": {
+      "service": "mdi:camera-iris"
+    }
+  }
+}

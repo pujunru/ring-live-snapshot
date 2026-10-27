@@ -1,0 +1,19 @@
+{
+  "domain": "ring_live_snapshot",
+  "name": "Ring Live Snapshot",
+  "codeowners": [
+    "@pujunru"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "camera"
+  ],
+  "documentation": "https://github.com/pujunru/ring-live-snapshot",
+  "integration_type": "helper",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/pujunru/ring-live-snapshot/issues",
+  "requirements": [
+    "aiortc==1.15.0"
+  ],
+  "version": "0.1.0"
+}
