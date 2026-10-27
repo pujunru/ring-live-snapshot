@@ -51,6 +51,54 @@
           "description": "Give up if no frame arrives within this many seconds."
         }
       }
+    },
+    "draw_boxes": {
+      "name": "Draw boxes",
+      "description": "Draws labelled boxes on a saved image, e.g. boxes returned by a vision AI task.",
+      "fields": {
+        "source": {
+          "name": "Source",
+          "description": "Image to draw on."
+        },
+        "filename": {
+          "name": "Filename",
+          "description": "Where to save the annotated JPEG."
+        },
+        "objects": {
+          "name": "Objects",
+          "description": "List of {label, box_2d}, where box_2d is [ymin, xmin, ymax, xmax] normalized to 0-1000 (Gemini's format)."
+        }
+      }
+    },
+    "detect": {
+      "name": "Detect objects (Roboflow)",
+      "description": "Runs a Roboflow object detection model on a saved image and returns the boxes. Needs roboflow_api_key under ring_live_snapshot: in configuration.yaml.",
+      "fields": {
+        "source": {
+          "name": "Source",
+          "description": "Image to run the model on."
+        },
+        "model_id": {
+          "name": "Model",
+          "description": "Roboflow model ID with version, e.g. package-detection/3."
+        },
+        "confidence": {
+          "name": "Confidence",
+          "description": "Minimum confidence (0-1) for a detection to be returned."
+        },
+        "filename": {
+          "name": "Filename",
+          "description": "Optional path to save a copy with the boxes drawn."
+        },
+        "confirm": {
+          "name": "Confirm",
+          "description": "Optional list of {label, box_2d} from another detector (e.g. Gemini). The response's confirmed list keeps those a Roboflow box overlaps."
+        },
+        "min_iou": {
+          "name": "Minimum overlap",
+          "description": "Intersection over union (0-1) a Roboflow box needs with a box in Confirm to confirm it."
+        }
+      }
     }
   }
 }

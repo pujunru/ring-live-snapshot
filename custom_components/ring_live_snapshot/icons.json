@@ -9,6 +9,12 @@
   "services": {
     "capture": {
       "service": "mdi:camera-iris"
+    },
+    "draw_boxes": {
+      "service": "mdi:vector-rectangle"
+    },
+    "detect": {
+      "service": "mdi:package-variant-closed"
     }
   }
 }

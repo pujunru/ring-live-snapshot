@@ -1,40 +1,91 @@
-# Package watch for the Ring "Garage Front" camera.
+# Package watch for the Ring "Garage Front" camera, using Gemini Flash Lite
+# (through Home Assistant's AI task) as the object detector.
 #
-# Every 30 minutes (07:00–21:00), and 2 minutes after each motion event, grab a
-# live frame and ask the AI task whether a package sits in front of the garage
-# door, comparing against a reference photo of the empty driveway. A package
-# must show up in two frames 3 minutes apart before anyone is notified; the
-# flag clears on the first scan that finds the spot empty again.
+# Runs on three triggers:
+#   - every hour on the hour, 07:00-21:00
+#   - each new Garage Front motion event (about 2 min after it starts)
+#   - 20 s after the garage door finishes opening or closing
 #
-# Needs: input_boolean.package_at_garage, and a reference frame taken once with
-# the driveway empty:
-#   action: ring_live_snapshot.capture
-#   data: {entity_id: camera.garage_front_live_view, filename: /media/garage_front/reference.jpg}
+# Each run grabs a live frame, asks Gemini for labelled boxes, and draws them
+# onto live_boxed.jpg. Gemini compares against reference.jpg, a photo of the
+# empty driveway, and reports only new objects.
+#
+# Gemini Flash Lite alone gives false positives (empty concrete at dusk and at
+# night), so a package only counts when a Roboflow package model draws a box
+# in the same spot (ring_live_snapshot.detect with `confirm`). The two models'
+# mistakes land in different places. A confirmed package must show up again
+# 3 minutes later before anyone is notified (with the boxed photo); the flag
+# clears on the first run where Gemini finds no package.
+#
+# Needs: input_boolean.package_at_garage, an ai_task entity backed by a Gemini
+# model (here OpenRouter's Gemini 2.5 Flash Lite), and a Roboflow API key:
+#   ring_live_snapshot:
+#     roboflow_api_key: !secret roboflow_api_key
 
 - id: garage_front_package_scan
   alias: "Garage Front – package scan"
-  mode: single
+  mode: queued
+  max: 2
   triggers:
     - trigger: time_pattern
-      minutes: "/30"
+      minutes: 0
+      id: hourly
+    # Ring's push events (event.garage_front_motion) don't reach HA here; this
+    # sensor is polled and updates ~2 min after motion, once the clip is ready.
     - trigger: state
       entity_id: sensor.garage_front_last_activity
-      for: "00:02:00"
+      not_to: ["unavailable", "unknown"]  # also ignores attribute-only updates
+      id: ring_motion
+    - trigger: state
+      entity_id: cover.ratgdo32_2ad3b4_door
+      to: ["open", "closed"]
+      for: "00:00:20"
+      id: garage_door
   conditions:
-    - condition: time
-      after: "07:00:00"
-      before: "21:00:00"
+    - condition: or
+      conditions:
+        - condition: not
+          conditions:
+            - condition: trigger
+              id: hourly
+        - condition: time
+          after: "07:00:00"
+          before: "21:00:00"
+    # Our own live views show up as "on_demand" activity; reacting to those
+    # would make every capture trigger the next one.
+    - condition: or
+      conditions:
+        - condition: not
+          conditions:
+            - condition: trigger
+              id: ring_motion
+        - condition: template
+          value_template: "{{ trigger.to_state.attributes.category in ['motion', 'ding'] }}"
     - condition: numeric_state
       entity_id: sensor.garage_front_battery
       above: 30
   variables:
+    ai_task_entity: ai_task.google_gemini_2_5_flash_lite
+    package_labels: ["package", "bag", "envelope"]
+    # Community model from Roboflow Universe; its class names are meaningless,
+    # so only the position of its boxes is used.
+    roboflow_model: package-box/1
     prompt: >-
-      Image 1 is a reference photo of the empty driveway in front of a garage
-      door. Image 2 is the same camera now. Is there a package, box, padded
-      envelope or shopping bag lying on the ground in image 2, near the garage
-      door or on the driveway, that is not in image 1? Ignore people, cars,
-      shadows, lighting changes, leaves, the drain cover, the round covers and
-      the plants.
+      Two photos from the same fixed security camera above a driveway in front
+      of a garage door. Image 1 is a reference taken when the driveway was
+      empty. Image 2 is now. List only objects in image 2 that are NOT in
+      image 1: a delivered package (any box or parcel), bag, envelope, person
+      or car. Things present in both images (plants, stains, the drain cover,
+      the round utility covers, the garage door) are not new; lighting and
+      shadow changes are not objects. Use exactly one label per object:
+      package, bag, envelope, person, car. Answer with a JSON list only:
+      [{"label": "...", "box_2d": [ymin, xmin, ymax, xmax]}] with coordinates
+      for image 2, normalized to 0-1000. Answer [] if nothing is new.
+    structure: &structure
+      objects_json:
+        description: JSON list of detections
+        required: true
+        selector: { text: { multiline: true } }
   actions:
     - action: ring_live_snapshot.capture
       data:
@@ -42,23 +93,27 @@
         filename: /media/garage_front/live.jpg
     - action: ai_task.generate_data
       data:
-        task_name: Garage front package check
+        entity_id: "{{ ai_task_entity }}"
+        task_name: Garage front detection
         instructions: "{{ prompt }}"
-        structure: &structure
-          package:
-            description: True if a delivered item is on the ground
-            required: true
-            selector: { boolean: {} }
-          where:
-            description: Short description of the item and its position, or empty
-            required: false
-            selector: { text: {} }
+        structure: *structure
         attachments:
           - media_content_id: media-source://media_source/local/garage_front/reference.jpg
             media_content_type: image/jpeg
           - media_content_id: media-source://media_source/local/garage_front/live.jpg
             media_content_type: image/jpeg
       response_variable: first
+    - variables:
+        objects: >-
+          {# Gemini sometimes adds fences or a stray trailing brace; keep the [...] part. #}
+          {% set raw = first.data.objects_json | default('[]') %}
+          {{ raw[raw.find('['):raw.rfind(']') + 1] | from_json(default=[]) }}
+        packages: "{{ objects | selectattr('label', 'in', package_labels) | list }}"
+    - action: ring_live_snapshot.draw_boxes
+      data:
+        source: /media/garage_front/live.jpg
+        filename: /media/garage_front/live_boxed.jpg
+        objects: "{{ objects }}"
     - choose:
         # Flag is up and the spot is empty again: clear it.
         - conditions:
@@ -66,18 +121,29 @@
               entity_id: input_boolean.package_at_garage
               state: "on"
             - condition: template
-              value_template: "{{ not first.data.package | default(true) }}"
+              value_template: "{{ packages | count == 0 }}"
           sequence:
             - action: input_boolean.turn_off
               target: { entity_id: input_boolean.package_at_garage }
-        # New package: confirm with a second frame before notifying.
+        # New package: Roboflow must agree, then again on a second frame.
         - conditions:
             - condition: state
               entity_id: input_boolean.package_at_garage
               state: "off"
             - condition: template
-              value_template: "{{ first.data.package | default(false) }}"
+              value_template: "{{ packages | count > 0 }}"
           sequence:
+            - action: ring_live_snapshot.detect
+              data:
+                source: /media/garage_front/live.jpg
+                model_id: "{{ roboflow_model }}"
+                confirm: "{{ packages }}"
+              response_variable: check
+            - if:
+                - condition: template
+                  value_template: "{{ check.confirmed | count == 0 }}"
+              then:
+                - stop: Roboflow found nothing where Gemini saw a package
             - delay: "00:03:00"
             - action: ring_live_snapshot.capture
               data:
@@ -85,7 +151,8 @@
                 filename: /media/garage_front/confirm.jpg
             - action: ai_task.generate_data
               data:
-                task_name: Garage front package confirm
+                entity_id: "{{ ai_task_entity }}"
+                task_name: Garage front detection confirm
                 instructions: "{{ prompt }}"
                 structure: *structure
                 attachments:
@@ -94,18 +161,40 @@
                   - media_content_id: media-source://media_source/local/garage_front/confirm.jpg
                     media_content_type: image/jpeg
               response_variable: second
+            - variables:
+                objects: >-
+                  {# Gemini sometimes adds fences or a stray trailing brace; keep the [...] part. #}
+                  {% set raw = second.data.objects_json | default('[]') %}
+                  {{ raw[raw.find('['):raw.rfind(']') + 1] | from_json(default=[]) }}
+                packages: "{{ objects | selectattr('label', 'in', package_labels) | list }}"
+            - action: ring_live_snapshot.detect
+              data:
+                source: /media/garage_front/confirm.jpg
+                model_id: "{{ roboflow_model }}"
+                confirm: "{{ packages }}"
+              response_variable: check
+            - variables:
+                packages: "{{ check.confirmed }}"
+            - action: ring_live_snapshot.draw_boxes
+              data:
+                source: /media/garage_front/confirm.jpg
+                filename: /media/garage_front/confirm_boxed.jpg
+                objects: "{{ packages }}"
             - if:
                 - condition: template
-                  value_template: "{{ second.data.package | default(false) }}"
+                  value_template: "{{ packages | count > 0 }}"
               then:
                 - action: input_boolean.turn_on
                   target: { entity_id: input_boolean.package_at_garage }
                 - variables:
-                    message: "{{ second.data.where or first.data.where or 'Something was left in front of the garage.' }}"
+                    message: >-
+                      {{ packages | count }} item(s) in front of the garage:
+                      {{ packages | map(attribute='label') | join(', ') }}
+                    image: "/media/local/garage_front/confirm_boxed.jpg?v={{ now().timestamp() | int }}"
                 - action: notify.mobile_app_your_phone  # one block per phone
                   data:
                     title: "📦 Package at the garage"
                     message: "{{ message }}"
                     data:
                       tag: garage-front-package
-                      image: /media/local/garage_front/confirm.jpg
+                      image: "{{ image }}"
